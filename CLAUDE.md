@@ -58,6 +58,11 @@ The project uses **direct PostgreSQL** (not Supabase) with:
 
 ### Integration Architecture
 
+**Email Provider Abstraction** (`/src/lib/email/`):
+- Sending is provider-agnostic: `sendEmail(options, smtp?)` in `/src/lib/email/index.ts` dispatches based on `EMAIL_PROVIDER` (`ses` default, or `smtp`) via `getEmailProvider()` in `/src/lib/email/provider.ts`
+- SMTP mode uses nodemailer (`/src/lib/email/smtp-provider.ts`) with per-domain relay settings stored in `domains.smtp_config` (password optionally encrypted via `/src/lib/crypto.ts`); domains auto-verify on add and skip all SES/DNS setup
+- Callers (`/src/app/api/emails`, `/src/lib/notifications.ts`) import from `@/lib/email`, not `@/lib/ses` directly
+
 **Amazon SES Integration** (`/src/lib/ses.ts`):
 - Domain verification and DKIM setup
 - Email sending (simple and raw with attachments)

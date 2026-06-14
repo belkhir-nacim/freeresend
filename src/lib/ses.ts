@@ -9,6 +9,10 @@ import {
   VerifyDomainDkimCommand,
   GetIdentityDkimAttributesCommand,
 } from "@aws-sdk/client-ses";
+import type { EmailAttachment, SendEmailOptions } from "@/lib/email/types";
+
+// Re-exported for backward compatibility with existing `from "@/lib/ses"` imports.
+export type { EmailAttachment, SendEmailOptions };
 
 const sesClient = new SESClient({
   region: process.env.AWS_REGION || "us-east-1",
@@ -17,25 +21,6 @@ const sesClient = new SESClient({
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
   },
 });
-
-export interface EmailAttachment {
-  filename: string;
-  content: string;
-  contentType: string;
-}
-
-export interface SendEmailOptions {
-  from: string;
-  to: string[];
-  cc?: string[];
-  bcc?: string[];
-  subject: string;
-  html?: string;
-  text?: string;
-  attachments?: EmailAttachment[];
-  replyTo?: string[];
-  tags?: Record<string, string>;
-}
 
 export interface SESVerificationResult {
   verificationToken: string;

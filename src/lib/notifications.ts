@@ -1,4 +1,34 @@
-import { sendEmail } from "./ses";
+import { sendEmail } from "./email";
+import { getEmailProvider } from "./email/provider";
+import type { SmtpTransportConfig } from "./email";
+
+// Internal notifications have no API-key/domain context. In SMTP mode, resolve
+// the relay from the FROM_EMAIL domain; if none is configured, return undefined
+// so sendEmail throws and the caller's try/catch skips the notification.
+// `domains`/`crypto` are imported lazily so this module doesn't pull in the
+// database (pg) driver at import time (keeps unit tests light).
+async function resolveNotificationSmtp(): Promise<SmtpTransportConfig | undefined> {
+  if (getEmailProvider() !== "smtp") return undefined;
+
+  const { extractDomainFromEmail, getDomainByName } = await import("./domains");
+  const { decryptSecret } = await import("./crypto");
+
+  const fromEmail = process.env.FROM_EMAIL || "info@freeresend.com";
+  const domainName = extractDomainFromEmail(fromEmail);
+  const record = domainName ? await getDomainByName(domainName) : null;
+
+  if (!record?.smtp_config) {
+    console.warn(
+      `[notifications] No SMTP relay configured for ${domainName || fromEmail}; skipping email.`
+    );
+    return undefined;
+  }
+
+  return {
+    ...record.smtp_config,
+    password: decryptSecret(record.smtp_config.password),
+  };
+}
 
 export interface WaitlistNotificationData {
   email: string;
@@ -157,6 +187,7 @@ FreeResend Admin Notifications
   `;
 
   try {
+    const smtp = await resolveNotificationSmtp();
     await sendEmail({
       from: `FreeResend Notifications <${fromEmail}>`,
       to: [adminEmail],
@@ -167,7 +198,7 @@ FreeResend Admin Notifications
         type: "waitlist_notification",
         signup_id: data.signupId,
       },
-    });
+    }, smtp);
 
     console.log(`Waitlist notification sent to ${adminEmail} for signup: ${data.email}`);
   } catch (error) {
@@ -300,6 +331,7 @@ Signup ID: ${signupId}
   `;
 
   try {
+    const smtp = await resolveNotificationSmtp();
     await sendEmail({
       from: `FreeResend <${fromEmail}>`,
       to: [email],
@@ -310,7 +342,7 @@ Signup ID: ${signupId}
         type: "waitlist_welcome",
         signup_id: signupId,
       },
-    });
+    }, smtp);
 
     console.log(`Welcome email sent to ${email}`);
   } catch (error) {

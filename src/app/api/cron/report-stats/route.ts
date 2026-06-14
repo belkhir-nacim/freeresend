@@ -8,12 +8,25 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 function checkCron(req: Request): boolean {
-  const header = req.headers.get("x-cron-secret") ?? "";
   const expected = process.env.CRON_SECRET ?? "";
-  return !!expected && header === expected;
+  if (!expected) return false;
+  // Vercel Cron calls this route with `Authorization: Bearer <CRON_SECRET>` (GET).
+  // The k8s CronJob calls it with `x-cron-secret: <CRON_SECRET>` (POST). Accept both.
+  const bearer = req.headers.get("authorization") === `Bearer ${expected}`;
+  const legacy = req.headers.get("x-cron-secret") === expected;
+  return bearer || legacy;
+}
+
+// Vercel Cron issues GET requests; the k8s CronJob issues POST. Both run the same job.
+export async function GET(req: Request) {
+  return handleReportStats(req);
 }
 
 export async function POST(req: Request) {
+  return handleReportStats(req);
+}
+
+async function handleReportStats(req: Request) {
   if (!checkCron(req)) {
     return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }

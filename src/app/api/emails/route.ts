@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { verifyApiKey } from "@/lib/api-keys";
-import { sendEmail } from "@/lib/ses";
+import { sendEmail, getEmailProvider } from "@/lib/email";
+import type { SmtpTransportConfig } from "@/lib/email";
 import { getDomainById } from "@/lib/domains";
 import { query } from "@/lib/database";
+import { decryptSecret } from "@/lib/crypto";
+
+// Sending goes through the AWS SES SDK; force the Node runtime (not Edge).
+export const runtime = "nodejs";
+export const maxDuration = 30;
 
 const attachmentSchema = z.object({
   filename: z.string(),
@@ -109,7 +115,22 @@ export async function POST(request: NextRequest) {
       ));
     }
 
-    // Convert arrays and prepare data for SES
+    // In SMTP mode, load this domain's relay settings (decrypting the password).
+    let smtpConfig: SmtpTransportConfig | undefined;
+    if (getEmailProvider() === "smtp") {
+      if (!domain.smtp_config) {
+        return cors(NextResponse.json(
+          { error: `No SMTP relay configured for domain ${domain.domain}` },
+          { status: 400 }
+        ));
+      }
+      smtpConfig = {
+        ...domain.smtp_config,
+        password: decryptSecret(domain.smtp_config.password),
+      };
+    }
+
+    // Convert arrays and prepare data for the email provider
     const toArray = Array.isArray(to) ? to : [to];
     const ccArray = cc ? (Array.isArray(cc) ? cc : [cc]) : undefined;
     const bccArray = bcc ? (Array.isArray(bcc) ? bcc : [bcc]) : undefined;
@@ -122,7 +143,7 @@ export async function POST(request: NextRequest) {
       contentType: att.contentType || 'application/octet-stream'
     }));
 
-    // Send email via SES
+    // Send email via the configured provider (SES, or per-domain SMTP relay)
     const messageId = await sendEmail({
       from,
       to: toArray,
@@ -134,20 +155,21 @@ export async function POST(request: NextRequest) {
       attachments: sesAttachments,
       replyTo: replyToArray,
       tags,
-    });
+    }, smtpConfig);
 
     // Log email in database
     let emailLog = null;
     try {
       const result = await query(
         `INSERT INTO email_logs (
-          api_key_id, domain_id, from_email, to_emails, cc_emails, bcc_emails,
+          api_key_id, domain_id, message_id, from_email, to_emails, cc_emails, bcc_emails,
           subject, html_content, text_content, attachments, status, ses_message_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *`,
         [
           apiKey.id,
           domain.id,
+          messageId,
           from,
           JSON.stringify(to),
           JSON.stringify(cc || []),
@@ -157,7 +179,8 @@ export async function POST(request: NextRequest) {
           text,
           JSON.stringify(attachments || []),
           "sent",
-          messageId,
+          // ses_message_id is only meaningful in SES mode (used by the SNS webhook).
+          getEmailProvider() === "ses" ? messageId : null,
         ]
       );
       emailLog = result.rows[0];

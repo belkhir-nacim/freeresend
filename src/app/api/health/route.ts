@@ -6,5 +6,6 @@ export async function GET() {
     timestamp: new Date().toISOString(),
     service: "FreeResend",
     version: "1.0.0",
+    emailProvider: process.env.EMAIL_PROVIDER === "smtp" ? "smtp" : "ses",
   });
 }

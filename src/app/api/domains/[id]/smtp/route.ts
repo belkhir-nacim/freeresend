@@ -1,9 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { query } from "@/lib/database";
 import { createSmtpCredentials, deleteSmtpCredentials } from "@/lib/smtp";
 import { verifyJWT } from "@/lib/auth";
+import { getEmailProvider, verifySmtpConnection } from "@/lib/email";
+import { encryptSecret } from "@/lib/crypto";
 
 export const dynamic = "force-dynamic";
+
+// Generic SMTP relay settings (used when EMAIL_PROVIDER=smtp).
+const smtpConfigSchema = z.object({
+  host: z.string().min(1, "host is required"),
+  port: z.number().int().positive(),
+  secure: z.boolean(),
+  username: z.string().min(1, "username is required"),
+  password: z.string().min(1, "password is required"),
+});
 
 function cors(response: NextResponse) {
   response.headers.set("Access-Control-Allow-Origin", "*");
@@ -55,6 +67,45 @@ export async function POST(
     }
 
     const domain = domainResult.rows[0];
+
+    // SMTP mode: store/test a user-provided relay for this domain.
+    if (getEmailProvider() === "smtp") {
+      let config;
+      try {
+        config = smtpConfigSchema.parse(await req.json());
+      } catch (e) {
+        return cors(NextResponse.json(
+          {
+            error: "Invalid SMTP settings",
+            details: (e as { errors?: unknown }).errors ?? String(e),
+          },
+          { status: 400 }
+        ));
+      }
+
+      try {
+        await verifySmtpConnection(config);
+      } catch (e) {
+        return cors(NextResponse.json(
+          {
+            error: "SMTP connection test failed",
+            details: e instanceof Error ? e.message : String(e),
+          },
+          { status: 400 }
+        ));
+      }
+
+      const stored = { ...config, password: encryptSecret(config.password) };
+      await query("UPDATE domains SET smtp_config = $1 WHERE id = $2", [
+        JSON.stringify(stored),
+        id,
+      ]);
+
+      return cors(NextResponse.json({
+        success: true,
+        smtp_config: { ...config, password: "********" },
+      }));
+    }
 
     // Check if domain is verified
     if (domain.status !== "verified") {
@@ -143,6 +194,15 @@ export async function DELETE(
     }
 
     const domain = domainResult.rows[0];
+
+    // SMTP mode: just clear the stored relay; there is no AWS resource to remove.
+    if (getEmailProvider() === "smtp") {
+      await query("UPDATE domains SET smtp_config = NULL WHERE id = $1", [id]);
+      return cors(NextResponse.json({
+        success: true,
+        message: "SMTP relay configuration removed",
+      }));
+    }
 
     // Delete SMTP credentials from AWS
     await deleteSmtpCredentials(domain.domain);

@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyJWT } from "@/lib/auth";
 import { getDomainById, checkDomainVerification } from "@/lib/domains";
 
+// Verification calls AWS SES; use the Node runtime and allow extra time.
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 function cors(response: NextResponse) {
   response.headers.set("Access-Control-Allow-Origin", "*");
   response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");

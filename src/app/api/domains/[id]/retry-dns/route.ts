@@ -8,6 +8,11 @@ import {
 } from "@/lib/digitalocean";
 import { generateDNSRecords, getDomainDkimTokens } from "@/lib/ses";
 
+// Re-creating DNS records makes several sequential DigitalOcean API calls; needs
+// the Node runtime (AWS SDK + pg) and extra time.
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 function cors(response: NextResponse) {
   response.headers.set("Access-Control-Allow-Origin", "*");
   response.headers.set(

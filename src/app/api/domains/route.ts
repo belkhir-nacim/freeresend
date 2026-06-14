@@ -3,6 +3,11 @@ import { z } from "zod";
 import { verifyJWT } from "@/lib/auth";
 import { addDomain, getUserDomains } from "@/lib/domains";
 
+// Adding a domain chains SES identity/DKIM + DigitalOcean DNS calls and can take
+// longer than the serverless default; needs the Node runtime for the AWS SDK + pg.
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 const addDomainSchema = z.object({
   domain: z.string().min(1, "Domain is required"),
 });

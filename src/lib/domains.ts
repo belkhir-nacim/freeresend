@@ -13,6 +13,7 @@ import {
   type DODomainRecord,
 } from "./digitalocean";
 import type { Domain } from "./database";
+import { getEmailProvider } from "./email/provider";
 
 export interface DNSRecord {
   type: string;
@@ -91,6 +92,30 @@ export async function addDomain(
   if (existingDomain) {
     // If domain exists, check and complete its setup
     return await verifyAndCompleteExistingDomain(userId, existingDomain);
+  }
+
+  // SMTP provider: skip all SES / DKIM / configuration-set / DNS / DigitalOcean
+  // setup and auto-verify the domain. The operator runs their own mail server
+  // and manages SPF/DKIM there, then configures the relay per domain.
+  if (getEmailProvider() === "smtp") {
+    const result = await query(
+      `INSERT INTO domains (user_id, domain, status, dns_records)
+       VALUES ($1, $2, 'verified', '[]')
+       RETURNING *`,
+      [userId, domainName]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error("Failed to create domain record");
+    }
+
+    const domain = { ...result.rows[0], dns_records: [] };
+    return {
+      domain,
+      dnsRecords: [],
+      setupInstructions:
+        "Domain auto-verified (SMTP mode). Configure this domain's SMTP relay to start sending.",
+    };
   }
 
   try {
@@ -187,6 +212,16 @@ async function verifyAndCompleteExistingDomain(
   // Check ownership
   if (existingDomain.user_id !== userId) {
     throw new Error("Domain belongs to another user");
+  }
+
+  // SMTP provider: no SES/DNS reconciliation to do — just return the existing row.
+  if (getEmailProvider() === "smtp") {
+    return {
+      domain: existingDomain,
+      dnsRecords: [],
+      setupInstructions:
+        "Domain already exists (SMTP mode). Configure its SMTP relay to send.",
+    };
   }
 
   const domainName = existingDomain.domain;
@@ -368,6 +403,11 @@ export async function getUserDomains(userId: string): Promise<Domain[]> {
     return result.rows.map((row) => ({
       ...row,
       dns_records: safeParseDNSRecords(row.dns_records),
+      // Never expose the SMTP relay password to the dashboard. The full value is
+      // available via getDomainById() for server-side sending.
+      smtp_config: row.smtp_config
+        ? { ...row.smtp_config, password: "" }
+        : row.smtp_config,
     }));
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -445,6 +485,14 @@ export async function checkDomainVerification(
   const domain = await getDomainById(domainId);
   if (!domain) {
     throw new Error("Domain not found");
+  }
+
+  // SMTP provider: there is no SES identity to poll — domains are trusted/verified.
+  if (getEmailProvider() === "smtp") {
+    if (domain.status !== "verified") {
+      await updateDomainStatus(domainId, "verified");
+    }
+    return "verified";
   }
 
   try {

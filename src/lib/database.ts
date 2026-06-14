@@ -1,15 +1,24 @@
 import { Pool, PoolClient } from "pg";
 
-// PostgreSQL connection pool
+// PostgreSQL connection pool.
+//
+// On serverless (Vercel) each warm container keeps its own module-scoped Pool, so
+// the total number of DB connections is (live containers) × (max). Keep `max` low
+// and always point DATABASE_URL at a transaction-mode pooler:
+//   - Vercel Postgres / Neon: the pooled "-pooler" host (?sslmode=require)
+//   - Supabase: the pooler host on port 6543 (transaction mode)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  // Managed Postgres (Vercel Postgres / Neon / Supabase) requires TLS, and their
+  // certificates are publicly trusted, so strict validation works by default.
+  // Set DATABASE_SSL_STRICT=false for providers that present a self-signed or
+  // otherwise un-verifiable chain.
   ssl: {
-    rejectUnauthorized: false,
-    ca: undefined,
+    rejectUnauthorized: process.env.DATABASE_SSL_STRICT !== "false",
   },
-  max: 5, // Maximum number of clients in the pool (reduced from 20)
-  idleTimeoutMillis: 10000, // Close idle clients after 10 seconds (reduced from 30s)
-  connectionTimeoutMillis: 5000, // Return an error after 5 seconds if connection could not be established
+  max: 2, // Low per-container cap; the upstream pooler multiplexes real connections.
+  idleTimeoutMillis: 30000, // Hold clients long enough for slower serverless invocations.
+  connectionTimeoutMillis: 5000, // Error after 5s if a connection cannot be established.
 });
 
 // Export the pool for direct access if needed
@@ -69,6 +78,15 @@ export interface Domain {
     password: string;
     server: string;
     port: number;
+  };
+  // Per-domain SMTP relay used for sending when EMAIL_PROVIDER=smtp. The password
+  // is masked ("") in dashboard-facing responses and may be encrypted at rest.
+  smtp_config?: {
+    host: string;
+    port: number;
+    secure: boolean;
+    username: string;
+    password: string;
   };
   created_at: string;
   updated_at: string;

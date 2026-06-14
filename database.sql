@@ -1,4 +1,13 @@
 -- FreeResend Database Schema
+--
+-- Idempotent: safe to run more than once. Tables/indexes use IF NOT EXISTS, the
+-- trigger function uses CREATE OR REPLACE, and each trigger is dropped before it
+-- is (re)created (PostgreSQL has no CREATE TRIGGER IF NOT EXISTS).
+--
+-- Apply to a managed Postgres (Vercel Postgres / Neon / Supabase) BEFORE first use:
+--   psql "$DATABASE_URL_UNPOOLED" -v ON_ERROR_STOP=1 -f database.sql
+-- The admin user is seeded separately at runtime via `POST /api/setup`
+-- (uses ADMIN_EMAIL / ADMIN_PASSWORD) — see DEPLOYMENT.md.
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
@@ -21,10 +30,15 @@ CREATE TABLE IF NOT EXISTS domains (
   do_domain_id VARCHAR(255),
   dns_records JSONB DEFAULT '[]',
   verification_token VARCHAR(255),
-  smtp_credentials JSONB, -- Stores encrypted SMTP username/password
+  smtp_credentials JSONB, -- SES/IAM SMTP creds generated for the end user (SES mode)
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Per-domain SMTP relay the app SENDS through when EMAIL_PROVIDER=smtp.
+-- Shape: { host, port, secure, username, password }. The password is encrypted
+-- at rest when ENCRYPTION_KEY is set (see src/lib/crypto.ts), else stored plain.
+ALTER TABLE domains ADD COLUMN IF NOT EXISTS smtp_config JSONB;
 
 -- API Keys table
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -114,27 +128,28 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Create triggers for updated_at automation
-CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users 
+-- Create triggers for updated_at automation (drop-then-create so re-running is safe)
+DROP TRIGGER IF EXISTS update_users_updated_at ON users;
+CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_domains_updated_at BEFORE UPDATE ON domains 
+DROP TRIGGER IF EXISTS update_domains_updated_at ON domains;
+CREATE TRIGGER update_domains_updated_at BEFORE UPDATE ON domains
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_api_keys_updated_at BEFORE UPDATE ON api_keys 
+DROP TRIGGER IF EXISTS update_api_keys_updated_at ON api_keys;
+CREATE TRIGGER update_api_keys_updated_at BEFORE UPDATE ON api_keys
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_email_logs_updated_at BEFORE UPDATE ON email_logs 
+DROP TRIGGER IF EXISTS update_email_logs_updated_at ON email_logs;
+CREATE TRIGGER update_email_logs_updated_at BEFORE UPDATE ON email_logs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
-CREATE TRIGGER update_waitlist_signups_updated_at BEFORE UPDATE ON waitlist_signups 
+DROP TRIGGER IF EXISTS update_waitlist_signups_updated_at ON waitlist_signups;
+CREATE TRIGGER update_waitlist_signups_updated_at BEFORE UPDATE ON waitlist_signups
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Initial data: Create default admin user (password: changeme123)
--- Note: Change this password after first login!
-INSERT INTO users (email, password_hash, name) 
-VALUES (
-  'admin@freeresend.com', 
-  '$2b$10$rHOuGCOB2xzvf1YqnHjlUuB9AKnp.xeL0JOV5E7zlM1QIFhW7qYGS', 
-  'Admin User'
-) ON CONFLICT (email) DO NOTHING;
+-- NOTE: The default admin user is intentionally NOT seeded here.
+-- After deploy, create it from ADMIN_EMAIL / ADMIN_PASSWORD by calling:
+--   curl -X POST https://YOUR-DOMAIN/api/setup
+-- (handled by initializeDefaultUser() in src/lib/auth.ts).

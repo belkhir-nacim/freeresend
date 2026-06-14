@@ -69,6 +69,11 @@ class ApiClient {
     return this.request("/auth/me");
   }
 
+  // Health / runtime config (e.g. which email provider is active)
+  async getHealth() {
+    return this.request("/health");
+  }
+
   // Domains
   async getDomains() {
     return this.request("/domains");
@@ -96,6 +101,30 @@ class ApiClient {
   async retryDigitalOceanDNS(id: string) {
     return this.request(`/domains/${id}/retry-dns`, {
       method: "POST",
+    });
+  }
+
+  // Per-domain SMTP relay (EMAIL_PROVIDER=smtp). Tests the connection server-side
+  // before saving; the password is never returned (masked).
+  async saveDomainSmtpConfig(
+    id: string,
+    config: {
+      host: string;
+      port: number;
+      secure: boolean;
+      username: string;
+      password: string;
+    }
+  ) {
+    return this.request(`/domains/${id}/smtp`, {
+      method: "POST",
+      body: JSON.stringify(config),
+    });
+  }
+
+  async deleteDomainSmtpConfig(id: string) {
+    return this.request(`/domains/${id}/smtp`, {
+      method: "DELETE",
     });
   }
 

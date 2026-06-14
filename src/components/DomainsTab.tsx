@@ -20,6 +20,13 @@ interface Domain {
     server: string;
     port: number;
   };
+  smtp_config?: {
+    host: string;
+    port: number;
+    secure: boolean;
+    username: string;
+    password: string;
+  };
   created_at: string;
 }
 
@@ -33,9 +40,23 @@ export default function DomainsTab() {
   const [showSmtpModal, setShowSmtpModal] = useState<Domain | null>(null);
   const [generatingSmtp, setGeneratingSmtp] = useState(false);
   const [deletingSmtp, setDeletingSmtp] = useState(false);
+  const [provider, setProvider] = useState<"ses" | "smtp">("ses");
+  const [showRelayModal, setShowRelayModal] = useState<Domain | null>(null);
+  const [savingRelay, setSavingRelay] = useState(false);
+  const [relayForm, setRelayForm] = useState({
+    host: "",
+    port: 587,
+    secure: false,
+    username: "",
+    password: "",
+  });
 
   useEffect(() => {
     loadDomains();
+    api
+      .getHealth()
+      .then((h) => setProvider(h.emailProvider === "smtp" ? "smtp" : "ses"))
+      .catch(() => {});
   }, []);
 
   const loadDomains = async () => {
@@ -58,7 +79,12 @@ export default function DomainsTab() {
       const response = await api.addDomain(newDomain.trim());
       setDomains([response.data.domain, ...domains]);
       setNewDomain("");
-      setShowDNSModal(response.data.domain);
+      // SMTP mode: domain is auto-verified — go straight to relay config.
+      if (provider === "smtp") {
+        openRelayModal(response.data.domain);
+      } else {
+        setShowDNSModal(response.data.domain);
+      }
     } catch (error: unknown) {
       const errorObj = error as { message?: string };
       alert(errorObj.message || "Failed to add domain");
@@ -175,6 +201,63 @@ export default function DomainsTab() {
     }
   };
 
+  const openRelayModal = (domain: Domain) => {
+    setRelayForm({
+      host: domain.smtp_config?.host || "",
+      port: domain.smtp_config?.port || 587,
+      secure: domain.smtp_config?.secure || false,
+      username: domain.smtp_config?.username || "",
+      password: "",
+    });
+    setShowRelayModal(domain);
+  };
+
+  const handleSaveRelay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!showRelayModal) return;
+
+    setSavingRelay(true);
+    try {
+      await api.saveDomainSmtpConfig(showRelayModal.id, {
+        host: relayForm.host.trim(),
+        port: Number(relayForm.port),
+        secure: relayForm.secure,
+        username: relayForm.username.trim(),
+        password: relayForm.password,
+      });
+      await loadDomains();
+      setShowRelayModal(null);
+      alert("SMTP relay saved and connection verified.");
+    } catch (error: unknown) {
+      const errorObj = error as { message?: string };
+      alert(errorObj.message || "Failed to save SMTP relay");
+    } finally {
+      setSavingRelay(false);
+    }
+  };
+
+  const handleRemoveRelay = async (domainId: string) => {
+    if (
+      !confirm(
+        "Remove the SMTP relay for this domain? Sending will stop until it is reconfigured."
+      )
+    )
+      return;
+
+    setSavingRelay(true);
+    try {
+      await api.deleteDomainSmtpConfig(domainId);
+      await loadDomains();
+      setShowRelayModal(null);
+      alert("SMTP relay removed.");
+    } catch (error: unknown) {
+      const errorObj = error as { message?: string };
+      alert(errorObj.message || "Failed to remove SMTP relay");
+    } finally {
+      setSavingRelay(false);
+    }
+  };
+
   const getStatusBadge = (status: Domain["status"]) => {
     const colors = {
       pending: "bg-yellow-100 text-yellow-800",
@@ -268,39 +351,54 @@ export default function DomainsTab() {
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">
-                      {domain.status === "pending" && (
+                      {provider === "smtp" ? (
+                        <button
+                          onClick={() => openRelayModal(domain)}
+                          className="text-purple-600 hover:text-purple-900 text-sm font-medium"
+                        >
+                          {domain.smtp_config
+                            ? "Edit SMTP Relay"
+                            : "Configure SMTP Relay"}
+                        </button>
+                      ) : (
                         <>
-                          <button
-                            onClick={() => setShowDNSModal(domain)}
-                            className="text-blue-600 hover:text-blue-900 text-sm font-medium"
-                          >
-                            View DNS Records
-                          </button>
-                          <button
-                            onClick={() => handleVerifyDomain(domain.id)}
-                            className="text-green-600 hover:text-green-900 text-sm font-medium"
-                          >
-                            Check Verification
-                          </button>
-                        </>
-                      )}
-                      {domain.status === "verified" && (
-                        <>
-                          {domain.smtp_credentials ? (
-                            <button
-                              onClick={() => setShowSmtpModal(domain)}
-                              className="text-purple-600 hover:text-purple-900 text-sm font-medium"
-                            >
-                              View SMTP
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => handleGenerateSmtp(domain.id)}
-                              disabled={generatingSmtp}
-                              className="text-purple-600 hover:text-purple-900 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                              {generatingSmtp ? "Generating..." : "Generate SMTP"}
-                            </button>
+                          {domain.status === "pending" && (
+                            <>
+                              <button
+                                onClick={() => setShowDNSModal(domain)}
+                                className="text-blue-600 hover:text-blue-900 text-sm font-medium"
+                              >
+                                View DNS Records
+                              </button>
+                              <button
+                                onClick={() => handleVerifyDomain(domain.id)}
+                                className="text-green-600 hover:text-green-900 text-sm font-medium"
+                              >
+                                Check Verification
+                              </button>
+                            </>
+                          )}
+                          {domain.status === "verified" && (
+                            <>
+                              {domain.smtp_credentials ? (
+                                <button
+                                  onClick={() => setShowSmtpModal(domain)}
+                                  className="text-purple-600 hover:text-purple-900 text-sm font-medium"
+                                >
+                                  View SMTP
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleGenerateSmtp(domain.id)}
+                                  disabled={generatingSmtp}
+                                  className="text-purple-600 hover:text-purple-900 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {generatingSmtp
+                                    ? "Generating..."
+                                    : "Generate SMTP"}
+                                </button>
+                              )}
+                            </>
                           )}
                         </>
                       )}
@@ -476,6 +574,139 @@ export default function DomainsTab() {
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* SMTP Relay Modal (EMAIL_PROVIDER=smtp) */}
+      {showRelayModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <form onSubmit={handleSaveRelay} className="mt-3">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                SMTP Relay for {showRelayModal.domain}
+              </h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Email from this domain is sent through this SMTP server. The
+                connection is tested before saving.
+              </p>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Host
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="smtp.example.com"
+                      value={relayForm.host}
+                      onChange={(e) =>
+                        setRelayForm({ ...relayForm, host: e.target.value })
+                      }
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">
+                      Port
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      value={relayForm.port}
+                      onChange={(e) =>
+                        setRelayForm({
+                          ...relayForm,
+                          port: Number(e.target.value),
+                        })
+                      }
+                      className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Username
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={relayForm.username}
+                    onChange={(e) =>
+                      setRelayForm({ ...relayForm, username: e.target.value })
+                    }
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Password
+                    {showRelayModal.smtp_config ? " (re-enter to update)" : ""}
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder={
+                      showRelayModal.smtp_config ? "Enter to update" : ""
+                    }
+                    value={relayForm.password}
+                    onChange={(e) =>
+                      setRelayForm({ ...relayForm, password: e.target.value })
+                    }
+                    className="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                  />
+                </div>
+
+                <div className="flex items-center">
+                  <input
+                    id="relay-secure"
+                    type="checkbox"
+                    checked={relayForm.secure}
+                    onChange={(e) =>
+                      setRelayForm({ ...relayForm, secure: e.target.checked })
+                    }
+                    className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                  />
+                  <label
+                    htmlFor="relay-secure"
+                    className="ml-2 block text-sm text-gray-700"
+                  >
+                    Use implicit TLS (port 465). Leave off for STARTTLS (587/25).
+                  </label>
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end space-x-3">
+                {showRelayModal.smtp_config && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveRelay(showRelayModal.id)}
+                    disabled={savingRelay}
+                    className="mr-auto px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
+                  >
+                    Remove
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowRelayModal(null)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingRelay}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
+                >
+                  {savingRelay ? "Testing..." : "Test & Save"}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
