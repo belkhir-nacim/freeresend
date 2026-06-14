@@ -11,11 +11,14 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   // Managed Postgres (Vercel Postgres / Neon / Supabase) requires TLS, and their
   // certificates are publicly trusted, so strict validation works by default.
-  // Set DATABASE_SSL_STRICT=false for providers that present a self-signed or
-  // otherwise un-verifiable chain.
-  ssl: {
-    rejectUnauthorized: process.env.DATABASE_SSL_STRICT !== "false",
-  },
+  // - DATABASE_SSL_STRICT=false: keep TLS but don't validate the cert chain
+  //   (self-signed / un-verifiable providers).
+  // - DATABASE_SSL=disable: turn TLS off entirely for a local/Docker Postgres
+  //   that does not serve SSL.
+  ssl:
+    process.env.DATABASE_SSL === "disable"
+      ? false
+      : { rejectUnauthorized: process.env.DATABASE_SSL_STRICT !== "false" },
   max: 2, // Low per-container cap; the upstream pooler multiplexes real connections.
   idleTimeoutMillis: 30000, // Hold clients long enough for slower serverless invocations.
   connectionTimeoutMillis: 5000, // Error after 5s if a connection cannot be established.
